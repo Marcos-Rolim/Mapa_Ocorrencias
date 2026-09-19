@@ -5,9 +5,11 @@ import pandas as pd
 DB_NAME = "incidents.db"
 
 def init_db():
-    """Inicializa a tabela de incidentes e dados de demonstração."""
+    """Inicializa a tabela de incidentes e aplica migração de colunas automaticamente."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    
+    # Criar tabela caso não exista
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS incidents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,7 +26,13 @@ def init_db():
         )
     ''')
     
-    # Dados de Exemplo
+    # Migração automática de coluna para retrocompatibilidade
+    try:
+        cursor.execute("ALTER TABLE incidents ADD COLUMN address_hint TEXT")
+    except sqlite3.OperationalError:
+        pass # Coluna já existe
+
+    # Inserir dados de demonstração se o banco estiver vazio
     cursor.execute("SELECT COUNT(*) FROM incidents")
     if cursor.fetchone()[0] == 0:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -109,7 +117,7 @@ def update_status(incident_id, new_status):
     conn.close()
 
 def get_dataframe():
-    """Exporta os dados em formato Pandas DataFrame para download."""
+    """Exporta os dados em formato Pandas DataFrame para relatórios."""
     conn = sqlite3.connect(DB_NAME)
     df = pd.read_sql_query("SELECT * FROM incidents ORDER BY id DESC", conn)
     conn.close()
