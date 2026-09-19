@@ -3,6 +3,7 @@ from streamlit_folium import st_folium
 import folium
 from folium.plugins import MarkerCluster
 from geopy.geocoders import Nominatim
+from streamlit_js_eval import get_geolocation
 import database as db
 import pandas as pd
 
@@ -16,14 +17,14 @@ st.set_page_config(
 # Inicializa o BD
 db.init_db()
 
-# Dicionário de Cores por Nível de Severidade (Para Ocorrências Ativas/Em Atendimento)
+# Dicionário de Cores por Nível de Severidade
 SEVERITY_COLORS = {
     "Baixo": "yellow",
     "Médio": "orange",
     "Crítico": "red"
 }
 
-# Mapeamento de Ícones por Natureza da Ocorrência (FontAwesome / Bootstrap Icons do Folium)
+# Ícones por Natureza da Ocorrência
 CATEGORY_ICONS = {
     "Buraco/Avaria na via": "wrench",
     "Árvore/Ramo caído": "tree",
@@ -50,7 +51,7 @@ CATEGORIES = [
     "Outro"
 ]
 
-# Geocodificador
+# Geocodificador de Endereços
 geolocator = Nominatim(user_agent="defesa_civil_app")
 
 # --- BARRA LATERAL (Sidebar) ---
@@ -89,7 +90,7 @@ cat_filter = st.sidebar.selectbox("Categoria:", ["Todas"] + CATEGORIES)
 sev_filter = st.sidebar.selectbox("Gravidade:", ["Todos", "Baixo", "Médio", "Crítico"])
 stat_filter = st.sidebar.selectbox("Status:", ["Todos", "active", "in_progress", "resolved"], format_func=lambda x: STATUS_MAP.get(x, x))
 
-# Obter Incidentes
+# Obter Incidentes do Banco
 incidents = db.get_incidents(cat_filter, sev_filter, stat_filter)
 
 # --- CORPO PRINCIPAL ---
@@ -130,13 +131,13 @@ with tab_mapa:
         marker_cluster = MarkerCluster(name="Ocorrências Agrupadas").add_to(m)
 
         for inc in incidents:
-            # REGRA DE ÍCONES E CORES DINÂMICAS:
+            # Regra de Cores e Ícones: Verde com 'OK' quando Resolvido
             if inc["status"] == "resolved":
-                color = "green"        # Ocorrência resolvida sempre fica VERDE
-                icon_name = "ok"       # Ícone de verificação / resolvido
+                color = "green"
+                icon_name = "ok"
             else:
-                color = SEVERITY_COLORS.get(inc["severity"], "orange") # Cor conforme a urgência (Amarelo/Laranja/Vermelho)
-                icon_name = CATEGORY_ICONS.get(inc["category"], "exclamation-sign") # Ícone conforme a natureza
+                color = SEVERITY_COLORS.get(inc["severity"], "orange")
+                icon_name = CATEGORY_ICONS.get(inc["category"], "exclamation-sign")
 
             status_desc = STATUS_MAP.get(inc["status"], inc["status"])
             
@@ -159,7 +160,7 @@ with tab_mapa:
 
         folium.LayerControl().add_to(m)
 
-        # Renderização Interativa
+        # Renderização Interativa do Mapa
         map_data = st_folium(m, width="100%", height=550)
 
     # Painel de Ação Lateral
@@ -167,27 +168,34 @@ with tab_mapa:
         if "👤 Cidadão" in role:
             st.subheader("➕ Novo Reporte")
             
+            # Tentar obter localização exata via GPS do dispositivo
+            gps_data = get_geolocation()
             clicked = map_data.get("last_clicked") if map_data else None
             
-            if clicked:
+            # Prioridade de localização: 1. GPS do Navegador | 2. Clique no Mapa | 3. Padrão
+            if gps_data and "coords" in gps_data:
+                lat = gps_data["coords"]["latitude"]
+                lng = gps_data["coords"]["longitude"]
+                st.success(f"📍 GPS Exato Detectado: {lat:.5f}, {lng:.5f}")
+            elif clicked:
                 lat, lng = clicked["lat"], clicked["lng"]
-                st.success(f"📍 Coordenada: {lat:.4f}, {lng:.4f}")
+                st.info(f"📍 Posição no Mapa: {lat:.5f}, {lng:.5f}")
             else:
                 lat, lng = map_center[0], map_center[1]
-                st.info("💡 Clique em qualquer ponto do mapa para selecionar a localização.")
+                st.warning("💡 Autorize o GPS no navegador ou clique em um ponto do mapa.")
 
             with st.form("new_incident"):
-                cat = st.selectbox("Tipo:", CATEGORIES)
+                cat = st.selectbox("Tipo de Evento:", CATEGORIES)
                 sev = st.select_slider("Urgência:", options=["Baixo", "Médio", "Crítico"], value="Médio")
-                desc = st.text_area("Descrição do Risco/Ocorrência:")
-                img = st.text_input("Link de Imagem (Opcional):")
+                desc = st.text_area("Descrição detalhada da ocorrência:")
+                img = st.text_input("Link de Imagem/Foto (Opcional):")
                 
                 if st.form_submit_button("🚨 Enviar para Defesa Civil", use_container_width=True):
                     if not desc.strip():
-                        st.error("Descreva a ocorrência antes de enviar.")
+                        st.error("Descreva a situação antes de enviar.")
                     else:
                         db.add_incident(cat, sev, desc, img, lat, lng)
-                        st.success("Ocorrência enviada com sucesso!")
+                        st.success("Ocorrência registrada com sucesso!")
                         st.rerun()
 
         else:
@@ -199,7 +207,7 @@ with tab_mapa:
 
             st.divider()
 
-            for inc in incidents[:5]: # Mostra os 5 mais recentes
+            for inc in incidents[:5]: # Exibe os 5 mais recentes
                 with st.expander(f"#{inc['id']} - {inc['category']}"):
                     st.write(f"**Urgência:** {inc['severity']}")
                     st.write(f"**Descrição:** {inc['description']}")
@@ -244,11 +252,10 @@ if "🛡️ Agente" in role and tab_analytics:
 
             st.divider()
 
-            # Tabela de Dados Completa + Botão para Download CSV/Excel
+            # Tabela de Dados Completa + Botão para Download CSV
             st.subheader("📋 Tabela Completa de Chamados")
             st.dataframe(df, use_container_width=True)
 
-            # Botão de Exportação CSV
             csv_data = df.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="📥 Baixar Relatório Completo (.CSV)",
